@@ -1,0 +1,17 @@
+[package]
+name = "lattice_poly_commit"
+version = "0.1.0"
+edition = "2021"
+description = "Lattice-based multilinear polynomial commitment scheme (mle_pc.md) with ExpanderPCS API."
+
+[dependencies]
+arith = { path = "../arith" }
+gkr_engine = { path = "../gkr_engine" }
+polynomials = { path = "../arith/polynomials" }
+serdes = { path = "../serdes" }
+transcript = { path = "../transcript" }
+rand.workspace = true
+goldilocks = { path = "../arith/goldilocks" }
+sha2.workspace = true
+rand_chacha.workspace = true
+ethnum.workspace = true

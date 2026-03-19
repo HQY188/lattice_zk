@@ -1,10 +1,9 @@
+use std::path::Path;
+
 use circuit::Circuit;
 use config_macros::declare_gkr_config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use gkr::{
-    utils::{KECCAK_BN254_CIRCUIT, KECCAK_BN254_WITNESS, KECCAK_M31_CIRCUIT, KECCAK_M31_WITNESS},
-    Prover,
-};
+use gkr::Prover;
 use gkr_engine::{
     BN254Config, ExpanderPCS, FieldEngine, GKREngine, GKRScheme, M31x16Config, MPIConfig,
     StructuredReferenceString,
@@ -63,12 +62,30 @@ fn benchmark_setup<Cfg: GKREngine>(
     )
 }
 
+/// Resolve path to workspace data dir (works from any cwd when running `cargo bench -p gkr`).
+fn workspace_data_path(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("data")
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn criterion_gkr_keccak(c: &mut Criterion) {
     declare_gkr_config!(
-        M31x16ConfigSha2,
+        M31x16RawConfig,
         FieldType::M31x16,
         FiatShamirHashType::SHA256,
         PCSCommitmentType::Raw,
+        GKRScheme::Vanilla
+    );
+    declare_gkr_config!(
+        M31x16LatticeConfig,
+        FieldType::M31x16,
+        FiatShamirHashType::SHA256,
+        PCSCommitmentType::Lattice,
         GKRScheme::Vanilla
     );
     declare_gkr_config!(
@@ -79,24 +96,60 @@ fn criterion_gkr_keccak(c: &mut Criterion) {
         GKRScheme::Vanilla
     );
 
-    let (m31_config, mut m31_circuit, m31_pcs_params, m31_pcs_proving_key, mut m31_pcs_scratch) =
-        benchmark_setup::<M31x16ConfigSha2>(KECCAK_M31_CIRCUIT, Some(KECCAK_M31_WITNESS));
+    let circuit_m31 = workspace_data_path("circuit_m31.txt");
+    let witness_m31 = workspace_data_path("witness_m31.txt");
+    let circuit_bn254 = workspace_data_path("circuit_bn254.txt");
+    let witness_bn254 = workspace_data_path("witness_bn254.txt");
+
+    let (m31_raw_config, mut m31_raw_circuit, m31_raw_pcs_params, m31_raw_pcs_proving_key, mut m31_raw_pcs_scratch) =
+        benchmark_setup::<M31x16RawConfig>(&circuit_m31, Some(&witness_m31));
+    let (m31_lattice_config, mut m31_lattice_circuit, m31_lattice_pcs_params, m31_lattice_pcs_proving_key, mut m31_lattice_pcs_scratch) =
+        benchmark_setup::<M31x16LatticeConfig>(&circuit_m31, Some(&witness_m31));
     let (
         bn254_config,
         mut bn254_circuit,
         bn254_pcs_params,
         bn254_pcs_proving_key,
         mut bn254_pcs_scratch,
-    ) = benchmark_setup::<BN254ConfigSha2>(KECCAK_BN254_CIRCUIT, Some(KECCAK_BN254_WITNESS));
+    ) = benchmark_setup::<BN254ConfigSha2>(&circuit_bn254, Some(&witness_bn254));
 
-    let num_keccak_m31 = 2 * <M31x16ConfigSha2 as GKREngine>::FieldConfig::get_field_pack_size();
+    let num_keccak_m31 = 2 * <M31x16RawConfig as GKREngine>::FieldConfig::get_field_pack_size();
     let num_keccak_bn254 = 2 * <BN254ConfigSha2 as GKREngine>::FieldConfig::get_field_pack_size();
+
+    let mut group_pcs = c.benchmark_group("GKR proving M31x16 by PCS (32 keccak/proof)");
+    group_pcs.measurement_time(std::time::Duration::from_secs(30));
+    group_pcs.sample_size(100);
+    group_pcs.bench_function(BenchmarkId::new("Raw", 0), |b| {
+        b.iter(|| {
+            prover_run::<M31x16RawConfig>(
+                &m31_raw_config,
+                &mut m31_raw_circuit,
+                &m31_raw_pcs_params,
+                &m31_raw_pcs_proving_key,
+                &mut m31_raw_pcs_scratch,
+            );
+            black_box(());
+        })
+    });
+    group_pcs.bench_function(BenchmarkId::new("Lattice", 0), |b| {
+        b.iter(|| {
+            prover_run::<M31x16LatticeConfig>(
+                &m31_lattice_config,
+                &mut m31_lattice_circuit,
+                &m31_lattice_pcs_params,
+                &m31_lattice_pcs_proving_key,
+                &mut m31_lattice_pcs_scratch,
+            );
+            black_box(());
+        })
+    });
+    group_pcs.finish();
 
     let mut group = c.benchmark_group("single thread proving keccak by GKR vanilla");
     group.bench_function(
         BenchmarkId::new(
             format!(
-                "Over M31, with {} keccak instances per proof",
+                "Over M31 (Raw), with {} keccak instances per proof",
                 num_keccak_m31
             ),
             0,
@@ -104,12 +157,12 @@ fn criterion_gkr_keccak(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 {
-                    prover_run::<M31x16ConfigSha2>(
-                        &m31_config,
-                        &mut m31_circuit,
-                        &m31_pcs_params,
-                        &m31_pcs_proving_key,
-                        &mut m31_pcs_scratch,
+                    prover_run::<M31x16RawConfig>(
+                        &m31_raw_config,
+                        &mut m31_raw_circuit,
+                        &m31_raw_pcs_params,
+                        &m31_raw_pcs_proving_key,
+                        &mut m31_raw_pcs_scratch,
                     );
                     black_box(())
                 };

@@ -1,5 +1,5 @@
-use std::os::raw::c_void;
-use std::{cmp, fmt::Debug, slice};
+use std::os::raw::{c_void, c_int};
+use std::{cmp, fmt::Debug, mem::MaybeUninit, slice};
 
 use arith::Field;
 use itertools::izip;
@@ -426,16 +426,16 @@ impl<'a> MPIEngine for MPIConfig<'a> {
     }
 
     #[inline]
-    fn create_shared_mem(&self, n_bytes: usize) -> (*mut u8, *mut ompi_win_t) {
+    fn create_shared_mem(&self, n_bytes: usize) -> (*mut u8, *mut c_void) {
         let window_size = if self.is_root() { n_bytes } else { 0 };
         let mut baseptr: *mut c_void = std::ptr::null_mut();
 
-        // Handle to the MPI window.  Initialize to null and let MPI fill it in.
-        let mut window_handle: MPI_Win = MPI_Win(std::ptr::null_mut());
+        // MPI_Win is ABI-dependent: i32 on MS-MPI (Windows), pointer on Open MPI (Unix).
+        let mut window_handle = unsafe { MaybeUninit::<MPI_Win>::zeroed().assume_init() };
 
         unsafe {
             MPI_Win_allocate_shared(
-                window_size as isize,
+                window_size as i64,
                 1,
                 RSMPI_INFO_NULL,
                 self.world.unwrap().as_raw(),
@@ -446,20 +446,22 @@ impl<'a> MPIEngine for MPIConfig<'a> {
 
             if !self.is_root() {
                 let mut size: MPI_Aint = 0;
-                let mut disp_unit: ::std::os::raw::c_int = 0;
+                let mut disp_unit: c_int = 0;
                 let mut query_baseptr: *mut c_void = std::ptr::null_mut();
                 MPI_Win_shared_query(
                     window_handle,
                     0,
                     &mut size as *mut MPI_Aint,
-                    &mut disp_unit as *mut ::std::os::raw::c_int,
+                    &mut disp_unit as *mut c_int,
                     &mut query_baseptr as *mut *mut c_void as *mut c_void,
                 );
                 baseptr = query_baseptr;
             }
-        }
 
-        (baseptr as *mut u8, window_handle.0)
+            // Return boxed MPI_Win so free_shared_mem can take ownership and call MPI_Win_free.
+            let win_ptr = Box::into_raw(Box::new(window_handle)) as *mut c_void;
+            (baseptr as *mut u8, win_ptr)
+        }
     }
 }
 

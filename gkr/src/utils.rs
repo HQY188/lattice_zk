@@ -42,6 +42,7 @@ fn download_and_store(url_path: &str, file: &str) {
     }
 
     let url = format!("{}{}", URL_PREFIX, url_path);
+    println!("Downloading {} ...", file);
     let download = Command::new("bash")
         .arg("-c")
         .arg(format!("wget {} -O {}", url, file))

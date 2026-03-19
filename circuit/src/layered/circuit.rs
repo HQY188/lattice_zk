@@ -1,10 +1,10 @@
 use std::fs;
 use std::io::Cursor;
+use std::os::raw::c_void;
 
 use arith::{Field, SimdField};
 use ark_std::test_rng;
 use gkr_engine::{root_println, FieldEngine, GKREngine, MPIConfig, MPIEngine, Transcript};
-use mpi::ffi::ompi_win_t;
 use serdes::ExpSerde;
 
 use crate::*;
@@ -173,7 +173,7 @@ impl<C: FieldEngine> Circuit<C> {
     pub fn prover_load_circuit<Cfg: GKREngine<FieldConfig = C>>(
         filename: &str,
         mpi_config: &MPIConfig,
-    ) -> (Self, *mut ompi_win_t) {
+    ) -> (Self, *mut c_void) {
         let circuit = if mpi_config.is_root() {
             let rc = RecursiveCircuit::<C>::load(filename).unwrap();
             let circuit = rc.flatten();

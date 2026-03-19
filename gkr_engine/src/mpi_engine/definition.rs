@@ -1,5 +1,7 @@
+use std::os::raw::c_void;
+
 use arith::Field;
-use mpi::{ffi::ompi_win_t, topology::Process};
+use mpi::topology::Process;
 use serdes::ExpSerde;
 
 use super::MPISharedMemory;
@@ -136,13 +138,14 @@ pub trait MPIEngine {
     fn barrier(&self);
 
     /// Create a shared memory segment for inter-process communication
-    fn create_shared_mem(&self, n_bytes: usize) -> (*mut u8, *mut ompi_win_t);
+    /// Returns (base_ptr, window_handle). The window_handle must be passed to free_shared_mem.
+    fn create_shared_mem(&self, n_bytes: usize) -> (*mut u8, *mut c_void);
 
     /// Consume the shared memory segment and create a new shared memory object
     fn consume_obj_and_create_shared<T: MPISharedMemory>(
         &self,
         obj: Option<T>,
-    ) -> (T, *mut ompi_win_t) {
+    ) -> (T, *mut c_void) {
         assert!(!self.is_root() || obj.is_some());
 
         if self.is_root() {
@@ -161,11 +164,14 @@ pub trait MPIEngine {
     }
 
     /// Discard the control of shared memory segment
-    fn free_shared_mem(&self, window: &mut *mut ompi_win_t) {
+    fn free_shared_mem(&self, window: &mut *mut c_void) {
         unsafe {
-            // Reconstruct an MPI_Win handle from the raw pointer and let MPI release it.
-            let mut win_handle = mpi::ffi::MPI_Win(*window);
-            mpi::ffi::MPI_Win_free(&mut win_handle as *mut mpi::ffi::MPI_Win);
+            if (*window).is_null() {
+                return;
+            }
+            let mut win_handle = Box::from_raw(*window as *mut mpi::ffi::MPI_Win);
+            mpi::ffi::MPI_Win_free(&mut *win_handle);
+            *window = std::ptr::null_mut();
         }
     }
 }

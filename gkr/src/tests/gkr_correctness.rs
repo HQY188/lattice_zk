@@ -145,6 +145,13 @@ fn test_gkr_correctness() {
         PolynomialCommitmentType::Raw,
         GKRScheme::Vanilla,
     );
+    declare_gkr_config!(
+        C16,
+        FieldType::M31x16,
+        FiatShamirHashType::SHA256,
+        PolynomialCommitmentType::Lattice,
+        GKRScheme::Vanilla,
+    );
     test_gkr_correctness_helper::<C0>(mpi_config.clone(), None);
     test_gkr_correctness_helper::<C1>(mpi_config.clone(), None);
     test_gkr_correctness_helper::<C2>(mpi_config.clone(), None);
@@ -161,6 +168,43 @@ fn test_gkr_correctness() {
     test_gkr_correctness_helper::<C13>(mpi_config.clone(), None);
     test_gkr_correctness_helper::<C14>(mpi_config.clone(), None);
     test_gkr_correctness_helper::<C15>(mpi_config.clone(), None);
+    test_gkr_correctness_helper::<C16>(mpi_config.clone(), None);
+}
+
+/// Only run GKR correctness with Raw PCS (M31x16 + SHA256). Used for performance comparison.
+/// Usage: cargo test -p gkr --release gkr_correctness_raw -- --nocapture
+#[test]
+fn test_gkr_correctness_raw() {
+    env_logger::init();
+    let universe = MPIConfig::init().unwrap();
+    let world = universe.world();
+    let mpi_config = MPIConfig::prover_new(Some(&universe), Some(&world));
+    declare_gkr_config!(
+        C1Raw,
+        FieldType::M31x16,
+        FiatShamirHashType::SHA256,
+        PolynomialCommitmentType::Raw,
+        GKRScheme::Vanilla,
+    );
+    test_gkr_correctness_helper::<C1Raw>(mpi_config, None);
+}
+
+/// Only run GKR correctness with Lattice PCS (M31x16 + SHA256).
+/// Usage: cargo test -p gkr --release gkr_correctness_lattice -- --nocapture
+#[test]
+fn test_gkr_correctness_lattice() {
+    env_logger::init();
+    let universe = MPIConfig::init().unwrap();
+    let world = universe.world();
+    let mpi_config = MPIConfig::prover_new(Some(&universe), Some(&world));
+    declare_gkr_config!(
+        C16Lattice,
+        FieldType::M31x16,
+        FiatShamirHashType::SHA256,
+        PolynomialCommitmentType::Lattice,
+        GKRScheme::Vanilla,
+    );
+    test_gkr_correctness_helper::<C16Lattice>(mpi_config, None);
 }
 
 #[allow(unreachable_patterns)]

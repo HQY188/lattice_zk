@@ -14,6 +14,7 @@ members = [
     "gkr",
     "gkr_engine", # definitions of GKR engine and associated types
     "hasher", # definitions of FiatShamirFieldHasher, FiatShamirBytesHash, and associated types
+    "lattice_poly_commit", # lattice-based multilinear PCS (mle_pc.md)
     "poly_commit",
     "serdes", # serialization and deserialization of various data structures
     "serdes_derive",

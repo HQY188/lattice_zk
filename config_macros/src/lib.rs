@@ -124,6 +124,10 @@ fn parse_polynomial_commitment_type(
             "Orion".to_owned(),
             format!("OrionPCSForGKR::<{field_config}, Goldilocksx8>").to_owned(),
         ),
+        ("Lattice", _) => (
+            "Lattice".to_owned(),
+            format!("lattice_poly_commit::LatticeMlePCS::<{field_config}>").to_owned(),
+        ),
         _ => panic!(
             "Unknown polynomial commitment type in config macro expansion. PCS: '{pcs_type_str}', Field: '{field_type}'"
         ),

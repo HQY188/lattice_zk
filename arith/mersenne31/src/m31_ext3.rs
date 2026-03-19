@@ -78,6 +78,33 @@ impl Field for M31Ext3 {
         }
     }
 
+    /// Encode element into a 96-bit integer inside U256 by packing three M31 limbs.
+    /// This is a bijection between M31Ext3 and its image in U256; it is ONLY used
+    /// by polynomial-commitment encoders and does not affect the field algebra.
+    #[inline(always)]
+    fn to_u256(&self) -> U256 {
+        // Each limb is a 31-bit value stored in a u32; we pack as
+        // low = v0 | (v1 << 32) | (v2 << 64).
+        let v0 = self.v[0].as_u32_unchecked() as u128;
+        let v1 = self.v[1].as_u32_unchecked() as u128;
+        let v2 = self.v[2].as_u32_unchecked() as u128;
+        let low = v0 | (v1 << 32) | (v2 << 64);
+        U256([low, 0])
+    }
+
+    /// Decode from the packed representation in `to_u256`.
+    #[inline(always)]
+    fn from_u256(value: U256) -> Self {
+        let (_high, low) = value.into_words();
+        let mask32: u128 = (1u128 << 32) - 1;
+        let v0 = (low & mask32) as u32;
+        let v1 = ((low >> 32) & mask32) as u32;
+        let v2 = ((low >> 64) & mask32) as u32;
+        M31Ext3 {
+            v: [M31::from(v0), M31::from(v1), M31::from(v2)],
+        }
+    }
+
     fn inv(&self) -> Option<Self> {
         if self.is_zero() {
             None

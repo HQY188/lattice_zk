@@ -1,0 +1,10 @@
+failed: Connection timed out.
+Connecting to pub-3be2514d8cd1470691b87e515984f903.r2.dev (pub-3be2514d8cd1470691b87e515984f903.r2.dev)|104.18.50.34|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 6200 (6.1K) [text/plain]
+Saving to: ‘data/witness_gf2.txt’
+
+     0K ......                                                100%  190K=0.03s
+
+2026-02-25 17:03:51 (190 KB/s) - ‘data/witness_gf2.txt’ saved [6200/6200]
+
