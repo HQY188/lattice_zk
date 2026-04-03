@@ -88,10 +88,19 @@ pub fn commit_real<F: Field>(
     coeffs: &[F],
     rng: &mut impl RngCore,
 ) -> (UniCommitmentReal, UniOpeningReal) {
-    assert!(coeffs.len() <= ck.params.ring_degree);
-    // One block for prototype.
-    let m = encode_block(coeffs, &ck.params);
     let r_vec = ck.crs.sample_rand_vec(rng);
+    commit_real_with_r_vec(ck, coeffs, r_vec)
+}
+
+/// Same as [`commit_real`], but uses pre-sampled randomness (e.g. after sequential RNG draws).
+/// Enables row-parallel multilinear commit while preserving the same RNG stream as sequential `commit_real`.
+pub fn commit_real_with_r_vec<F: Field>(
+    ck: &UniCkReal,
+    coeffs: &[F],
+    r_vec: Vec<PolyRns>,
+) -> (UniCommitmentReal, UniOpeningReal) {
+    assert!(coeffs.len() <= ck.params.ring_degree);
+    let m = encode_block(coeffs, &ck.params);
     let c = ck.crs.commit(&[m.clone()], &r_vec);
     (
         UniCommitmentReal { blocks: vec![c] },

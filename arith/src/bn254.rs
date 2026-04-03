@@ -70,7 +70,11 @@ impl Field for Fr {
 
     /// expose the element as u32.
     fn as_u32_unchecked(&self) -> u32 {
-        todo!()
+        // Interpret the canonical little-endian encoding's low 32 bits as u32.
+        // Caller is responsible for ensuring this is a meaningful conversion.
+        let mut bytes = [0u8; 32];
+        <Fr as Field>::to_bytes(self, &mut bytes);
+        u32::from_le_bytes(bytes[..4].try_into().unwrap())
     }
 
     #[inline(always)]

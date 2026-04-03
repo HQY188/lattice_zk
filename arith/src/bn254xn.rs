@@ -165,7 +165,9 @@ impl<const N: usize> Field for FrxN<N> {
 
     /// expose the element as u32.
     fn as_u32_unchecked(&self) -> u32 {
-        todo!()
+        // For SIMD packs, interpret the first lane as representative.
+        // This matches the "unchecked" semantics (caller ensures correctness).
+        self.v[0].as_u32_unchecked()
     }
 
     #[inline(always)]

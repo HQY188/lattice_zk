@@ -1,4 +1,5 @@
 use rand::RngCore;
+use rayon::prelude::*;
 use serdes::{ExpSerde, SerdeResult};
 
 use crate::{
@@ -6,6 +7,31 @@ use crate::{
     ring::{PolyRns, RnsModuli},
     sampler::GaussianSampler,
 };
+
+/// Set to `0`, `false`, or `no` (case-insensitive) to force sequential μ-loop in [`AjtaiCrs::commit`].
+/// Default: parallel when [`PAR_AJTAI_COMMIT_MIN_MU`] is met and the caller is **not** already on a Rayon worker
+/// (so MLE row-parallel commit does not nest another `par_iter` inside each row).
+pub const ENV_AJTAI_COMMIT_PARALLEL: &str = "LATTICE_AJTAI_COMMIT_PARALLEL";
+
+/// Minimum μ to use parallel [`AjtaiCrs::commit`] (avoids Rayon overhead on tiny matrices).
+pub const PAR_AJTAI_COMMIT_MIN_MU: usize = 4;
+
+fn ajtai_commit_parallel_enabled() -> bool {
+    match std::env::var(ENV_AJTAI_COMMIT_PARALLEL) {
+        Ok(s) => {
+            let s = s.trim().to_ascii_lowercase();
+            !(s.is_empty() || s == "0" || s == "false" || s == "no")
+        }
+        Err(_) => true,
+    }
+}
+
+#[inline]
+fn should_parallelize_ajtai_commit(mu: usize) -> bool {
+    ajtai_commit_parallel_enabled()
+        && mu >= PAR_AJTAI_COMMIT_MIN_MU
+        && rayon::current_thread_index().is_none()
+}
 
 /// Ajtai CRS: A0 in R_q^{mu x ell}, A1 in R_q^{mu x nu}.
 #[derive(Clone, Debug)]
@@ -60,13 +86,43 @@ impl AjtaiCrs {
     }
 
     /// Commit to message vector `m` (length ell) with randomness vector `r` (length nu).
+    ///
+    /// When μ ≥ [`PAR_AJTAI_COMMIT_MIN_MU`], [`ENV_AJTAI_COMMIT_PARALLEL`] allows it, and the caller is not
+    /// already on a Rayon worker thread, the outer μ loop is parallelized (shared read-only NTT plan and CRS).
     pub fn commit(&self, m: &[PolyRns], r: &[PolyRns]) -> AjtaiCommitment {
         assert_eq!(m.len(), self.params.ell);
         assert_eq!(r.len(), self.params.nu);
-        let mut out = AjtaiCommitment::zero(self.params.mu, self.params.ring_degree, self.params.moduli.clone());
+        let mu = self.params.mu;
+        if should_parallelize_ajtai_commit(mu) {
+            let ntt = self.params.ntt_plan();
+            let ring_degree = self.params.ring_degree;
+            let moduli = self.params.moduli.clone();
+            let ell = self.params.ell;
+            let nu = self.params.nu;
+            let a0 = &self.a0;
+            let a1 = &self.a1;
+            let value: Vec<PolyRns> = (0..mu)
+                .into_par_iter()
+                .map(|i| {
+                    let mut acc = PolyRns::zero(ring_degree, moduli.clone());
+                    for j in 0..ell {
+                        let prod = a0[i][j].mul_negacyclic(&m[j], &ntt);
+                        acc.add_assign(&prod);
+                    }
+                    for j in 0..nu {
+                        let prod = a1[i][j].mul_negacyclic(&r[j], &ntt);
+                        acc.add_assign(&prod);
+                    }
+                    acc
+                })
+                .collect();
+            return AjtaiCommitment { value };
+        }
+
+        let mut out = AjtaiCommitment::zero(mu, self.params.ring_degree, self.params.moduli.clone());
         let ntt = self.params.ntt_plan();
 
-        for i in 0..self.params.mu {
+        for i in 0..mu {
             // sum_j A0[i][j] * m[j] + sum_j A1[i][j] * r[j]
             for j in 0..self.params.ell {
                 let prod = self.a0[i][j].mul_negacyclic(&m[j], &ntt);
@@ -139,6 +195,39 @@ fn sample_uniform_matrix(
         out.push(row);
     }
     out
+}
+
+#[cfg(test)]
+mod ajtai_commit_parallel_tests {
+    use super::*;
+    use crate::params::LatticeParams;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn commit_parallel_matches_sequential_large_mu() {
+        let _g = ENV_LOCK.lock().unwrap();
+
+        let mut params = LatticeParams::default_small();
+        params.mu = 8;
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let crs = AjtaiCrs::setup(params, &mut rng);
+        let m: Vec<PolyRns> = (0..crs.params.ell)
+            .map(|_| PolyRns::zero(crs.params.ring_degree, crs.params.moduli.clone()))
+            .collect();
+        let r = crs.sample_rand_vec(&mut StdRng::seed_from_u64(7));
+
+        std::env::set_var(ENV_AJTAI_COMMIT_PARALLEL, "0");
+        let seq = crs.commit(&m, &r);
+        std::env::remove_var(ENV_AJTAI_COMMIT_PARALLEL);
+        let par = crs.commit(&m, &r);
+
+        assert_eq!(seq, par);
+    }
 }
 
 fn sample_small_poly<'a, R: RngCore>(

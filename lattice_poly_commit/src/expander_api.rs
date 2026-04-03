@@ -8,12 +8,12 @@ use gkr_engine::{
 };
 use polynomials::MultilinearExtension;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
-use serdes::ExpSerde;
+use serdes::{ExpSerde, SerdeResult};
 
 use crate::multilinear::{
     self, commit_with_rng as mle_commit_with_rng, compute_a_b, compute_u, dot_product,
     eval_with_fs_given_a as mle_eval_with_fs_given_a, setup as mle_setup, verify as mle_verify,
-    MleCk, MleCommitment, IOTA,
+    MleCk, MleCommitment, MleOpening, IOTA,
 };
 use crate::univariate::{random_poly};
 use crate::univariate_real::{commit_real as uni_commit};
@@ -31,22 +31,80 @@ where
     C::SimdCircuitField: SimdField,
 {
     let tail_len = l / iota;
-    let head_len = l - tail_len;
-    assert_eq!(poly_evals.len(), 1 << 10);
-    assert_eq!(head_len, 7);
-    assert_eq!(tail_len, 7);
+    let _head_len = l - tail_len;
     let pack_size = C::SimdCircuitField::PACK_SIZE;
-    assert_eq!(pack_size, 16);
+    let simd_bits = pack_size.ilog2() as usize;
+    debug_assert_eq!(1usize << simd_bits, pack_size);
+
+    // One SIMD multilinear eval has `num_vars` variables on the hypercube; each point is a SIMD
+    // vector of `pack_size` lanes. Total indexed space is 2^l = 2^num_vars * pack_size.
+    let hc_len = poly_evals.len();
+    assert!(
+        hc_len.is_power_of_two(),
+        "SIMD hypercube basis length must be a power of two, got {}",
+        hc_len
+    );
+    let num_poly_vars = hc_len.trailing_zeros() as usize;
+    debug_assert_eq!(hc_len, 1usize << num_poly_vars);
+    assert_eq!(
+        poly_evals.len() * pack_size,
+        1usize << l,
+        "SIMD hypercube size mismatch: len={} pack={} l={}",
+        poly_evals.len(),
+        pack_size,
+        l
+    );
+
+    // Same bit layout as the M31x16 special case: split `idx` into (head, tail) of lengths
+    // (head_len, tail_len), take SIMD lane from low bits of `head`, and interleave the rest
+    // with `tail` so that `i_rz` spans `num_poly_vars` bits.
+    let shift_tail = tail_len.saturating_sub(simd_bits);
+
     let size = 1 << l;
     let mut out = vec![C::ChallengeField::zero(); size];
     for idx in 0..size {
-        let tail_7 = idx & ((1 << tail_len) - 1);
-        let head_7 = idx >> tail_len;
-        let i_simd = head_7 & (pack_size - 1);
-        let i_rz = (head_7 >> (pack_size.ilog2() as usize)) | (tail_7 << 3);
+        let tail = idx & ((1 << tail_len) - 1);
+        let head = idx >> tail_len;
+        let i_simd = head & (pack_size - 1);
+        let i_rz = (head >> simd_bits) | (tail << shift_tail);
+        debug_assert!(i_rz < poly_evals.len());
         out[idx] = C::ChallengeField::from(poly_evals[i_rz].unpack()[i_simd]);
     }
     out
+}
+
+/// Prover scratch: caches `(C, δ)` from [`LatticeMlePCS::commit`] so [`LatticeMlePCS::open`] skips
+/// repeating `build_matrix_t` and full row commits (GKR calls `open` twice per proof for the same input poly).
+#[derive(Clone, Debug, Default)]
+pub struct LatticeMleScratchPad<F: Field + ExpSerde> {
+    cached: Option<(MleCommitment<F>, MleOpening<F>)>,
+}
+
+impl<F: Field + ExpSerde> ExpSerde for LatticeMleScratchPad<F> {
+    fn serialize_into<W: std::io::Write>(&self, mut writer: W) -> SerdeResult<()> {
+        match &self.cached {
+            None => 0u8.serialize_into(&mut writer)?,
+            Some((c, d)) => {
+                1u8.serialize_into(&mut writer)?;
+                c.serialize_into(&mut writer)?;
+                d.serialize_into(&mut writer)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn deserialize_from<R: std::io::Read>(mut reader: R) -> SerdeResult<Self> {
+        let tag = u8::deserialize_from(&mut reader)?;
+        let cached = match tag {
+            0 => None,
+            1 => Some((
+                MleCommitment::deserialize_from(&mut reader)?,
+                MleOpening::deserialize_from(&mut reader)?,
+            )),
+            _ => return Err(serdes::SerdeError::DeserializeError),
+        };
+        Ok(Self { cached })
+    }
 }
 
 /// Lattice-based MLE PCS for Expander GKR.
@@ -64,7 +122,7 @@ where
     const PCS_TYPE: PolynomialCommitmentType = PolynomialCommitmentType::Lattice;
 
     type Params = usize;
-    type ScratchPad = ();
+    type ScratchPad = LatticeMleScratchPad<C::ChallengeField>;
 
     type SRS = MleCk<C::ChallengeField>;
     type Commitment = MleCommitment<C::ChallengeField>;
@@ -89,6 +147,7 @@ where
     }
 
     fn init_scratch_pad(_params: &Self::Params, _mpi_engine: &impl MPIEngine) -> Self::ScratchPad {
+        LatticeMleScratchPad::default()
     }
 
     fn commit(
@@ -96,13 +155,14 @@ where
         mpi_engine: &impl MPIEngine,
         proving_key: &<Self::SRS as StructuredReferenceString>::PKey,
         poly: &impl MultilinearExtension<C::SimdCircuitField>,
-        _scratch_pad: &mut Self::ScratchPad,
+        scratch_pad: &mut Self::ScratchPad,
     ) -> Option<Self::Commitment> {
         let l = *params;
         assert!(l >= 1 && poly.num_vars() <= l);
+        let iota = proving_key.iota;
 
         let f_challenge: Vec<C::ChallengeField> = if poly.num_vars() < l {
-            expand_simd_poly_to_challenge_hypercube::<C>(&poly.hypercube_basis(), l, IOTA)
+            expand_simd_poly_to_challenge_hypercube::<C>(&poly.hypercube_basis(), l, iota)
         } else {
             poly.hypercube_basis()
                 .iter()
@@ -112,7 +172,8 @@ where
 
         if mpi_engine.is_single_process() {
             let mut rng = StdRng::seed_from_u64(0);
-            let (c, _delta) = mle_commit_with_rng(proving_key, &f_challenge, &mut rng);
+            let (c, delta) = mle_commit_with_rng(proving_key, &f_challenge, &mut rng);
+            scratch_pad.cached = Some((c.clone(), delta));
             return Some(c);
         }
 
@@ -136,7 +197,8 @@ where
             .map(|x| C::ChallengeField::from(x.unpack()[0]))
             .collect();
         let mut rng = StdRng::seed_from_u64(0);
-        let (c, _delta) = mle_commit_with_rng(proving_key, &f_challenge, &mut rng);
+        let (c, delta) = mle_commit_with_rng(proving_key, &f_challenge, &mut rng);
+        scratch_pad.cached = Some((c.clone(), delta));
         Some(c)
     }
 
@@ -147,14 +209,15 @@ where
         poly: &impl MultilinearExtension<C::SimdCircuitField>,
         x: &ExpanderSingleVarChallenge<C>,
         transcript: &mut impl Transcript,
-        _scratch_pad: &Self::ScratchPad,
+        scratch_pad: &Self::ScratchPad,
     ) -> Option<Self::Opening> {
         let r = x.global_xs();
         let l = r.len();
         assert_eq!(l, *params);
+        let iota = proving_key.iota;
 
         let mut f_challenge: Vec<C::ChallengeField> = if poly.num_vars() < l {
-            expand_simd_poly_to_challenge_hypercube::<C>(&poly.hypercube_basis(), l, IOTA)
+            expand_simd_poly_to_challenge_hypercube::<C>(&poly.hypercube_basis(), l, iota)
         } else {
             poly.hypercube_basis()
                 .iter()
@@ -181,16 +244,27 @@ where
                 .collect();
         }
 
-        // IMPORTANT: use deterministic randomness so that the commitment `c` used
-        // here matches the `c` produced in `commit()`; otherwise GKR verification fails.
-        let mut rng_commit = StdRng::seed_from_u64(0);
-        let (c, delta) = mle_commit_with_rng(proving_key, &f_challenge, &mut rng_commit);
-        let t = multilinear::build_matrix_t(&f_challenge, l, IOTA);
-        let (a, b) = compute_a_b(&r, l, IOTA);
+        // Reuse `(c, δ)` from `commit` when present (GKR: same input poly, same deterministic RNG).
+        let fresh_commit = if scratch_pad.cached.is_none() {
+            let mut rng_commit = StdRng::seed_from_u64(0);
+            Some(mle_commit_with_rng(proving_key, &f_challenge, &mut rng_commit))
+        } else {
+            None
+        };
+        let (c, delta) = match &scratch_pad.cached {
+            Some((c, delta)) => (c, delta),
+            None => {
+                let (c, delta) = fresh_commit.as_ref().expect("fresh commit when cache empty");
+                (c, delta)
+            }
+        };
+
+        let t = multilinear::build_matrix_t(&f_challenge, l, iota);
+        let (a, b) = compute_a_b(&r, l, iota);
         let u = compute_u(&a, &t);
         let y = dot_product(&u, &b);
 
-        let n_cols = 1 << (l - l / IOTA);
+        let n_cols = 1 << (l - l / iota);
         let mut rng = rand::thread_rng();
         let a_poly = random_poly::<C::ChallengeField>(n_cols, &mut rng);
         let (c_a, delta_a) = uni_commit(&proving_key.ck_uni, &a_poly, &mut rng);

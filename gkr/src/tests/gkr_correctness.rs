@@ -25,6 +25,21 @@ use transcript::BytesHashTranscript;
 
 use crate::{utils::*, Prover, Verifier};
 
+fn override_test_data_path(var: &str) -> Option<String> {
+    let v = std::env::var(var).ok()?;
+    let v = v.trim();
+    if v.is_empty() {
+        return None;
+    }
+    // These tests historically load from "../data/..." because the crate's CWD is `gkr/`.
+    // Allow callers (scripts/CI) to pass either "data/..." or "../data/..." or an absolute path.
+    if v.starts_with("data/") || v.starts_with(r"data\") {
+        Some("../".to_owned() + v)
+    } else {
+        Some(v.to_owned())
+    }
+}
+
 #[test]
 fn test_gkr_correctness() {
     // Initialize logger
@@ -207,6 +222,125 @@ fn test_gkr_correctness_lattice() {
     test_gkr_correctness_helper::<C16Lattice>(mpi_config, None);
 }
 
+/// Libra: run correctness with Raw PCS + SHA256 on a single dataset.
+/// The dataset is passed via env:
+/// - GKR_TEST_FIELD_TYPE: one of {m31,gf2,bn254,goldilocks,babybear}
+/// - GKR_TEST_CIRCUIT_PATH / GKR_TEST_WITNESS_PATH: optional overrides
+/// Usage:
+///   $env:GKR_TEST_FIELD_TYPE="bn254"; $env:GKR_TEST_CIRCUIT_PATH="..."; $env:GKR_TEST_WITNESS_PATH="..."
+///   cargo test -p gkr --release gkr_correctness_libra_case -- --nocapture
+#[test]
+fn test_gkr_correctness_libra_case() {
+    env_logger::init();
+    let universe = MPIConfig::init().unwrap();
+    let world = universe.world();
+    let mpi_config = MPIConfig::prover_new(Some(&universe), Some(&world));
+
+    let field = std::env::var("GKR_TEST_FIELD_TYPE")
+        .unwrap_or_else(|_| "m31".to_owned())
+        .to_ascii_lowercase();
+
+    match field.as_str() {
+        "m31" => {
+            declare_gkr_config!(
+                LibraM31,
+                FieldType::M31x16,
+                FiatShamirHashType::SHA256,
+                PolynomialCommitmentType::Raw,
+                GKRScheme::Vanilla,
+            );
+            test_gkr_correctness_helper::<LibraM31>(mpi_config, None);
+        }
+        "gf2" | "gf2ext128" => {
+            declare_gkr_config!(
+                LibraGF2,
+                FieldType::GF2Ext128,
+                FiatShamirHashType::SHA256,
+                PolynomialCommitmentType::Raw,
+                GKRScheme::Vanilla,
+            );
+            test_gkr_correctness_helper::<LibraGF2>(mpi_config, None);
+        }
+        "bn254" => {
+            declare_gkr_config!(
+                LibraBN254,
+                FieldType::BN254,
+                FiatShamirHashType::SHA256,
+                PolynomialCommitmentType::Raw,
+                GKRScheme::Vanilla,
+            );
+            test_gkr_correctness_helper::<LibraBN254>(mpi_config, None);
+        }
+        "goldilocks" => {
+            declare_gkr_config!(
+                LibraGoldilocks,
+                FieldType::Goldilocksx8,
+                FiatShamirHashType::SHA256,
+                PolynomialCommitmentType::Raw,
+                GKRScheme::Vanilla,
+            );
+            test_gkr_correctness_helper::<LibraGoldilocks>(mpi_config, None);
+        }
+        "babybear" => {
+            declare_gkr_config!(
+                LibraBabyBear,
+                FieldType::BabyBearx16,
+                FiatShamirHashType::SHA256,
+                PolynomialCommitmentType::Raw,
+                GKRScheme::Vanilla,
+            );
+            test_gkr_correctness_helper::<LibraBabyBear>(mpi_config, None);
+        }
+        other => panic!("Unsupported GKR_TEST_FIELD_TYPE for libra: {other}"),
+    }
+}
+
+/// Lattiswift: run correctness with Lattice PCS + SHA256 on a single dataset.
+/// Supported: `m31`, `babybear` (SIMD pack + scalar-friendly `as_u32_unchecked`).
+/// Skipped: `gf2` (GF128 has no u32 projection), `bn254`, `goldilocks` (encoder prototype).
+/// Env: `GKR_TEST_FIELD_TYPE`, optional `GKR_TEST_CIRCUIT_PATH` / `GKR_TEST_WITNESS_PATH`.
+#[test]
+fn test_gkr_correctness_lattiswift_case() {
+    env_logger::init();
+    let universe = MPIConfig::init().unwrap();
+    let world = universe.world();
+    let mpi_config = MPIConfig::prover_new(Some(&universe), Some(&world));
+
+    let field = std::env::var("GKR_TEST_FIELD_TYPE")
+        .unwrap_or_else(|_| "m31".to_owned())
+        .to_ascii_lowercase();
+
+    match field.as_str() {
+        "m31" => {
+            declare_gkr_config!(
+                LattiswiftM31,
+                FieldType::M31x16,
+                FiatShamirHashType::SHA256,
+                PolynomialCommitmentType::Lattice,
+                GKRScheme::Vanilla,
+            );
+            test_gkr_correctness_helper::<LattiswiftM31>(mpi_config, None);
+        }
+        "bn254" | "goldilocks" | "gf2" | "gf2ext128" => {
+            // Lattice PCS `encode_block` uses `as_u32_unchecked()`; GF128 intentionally has no
+            // such projection; BN254 / Goldilocks are not supported by the current prototype.
+            println!("[lattiswift] SKIP unsupported field for lattice PCS: {field}");
+            return;
+        }
+        "babybear" => {
+            declare_gkr_config!(
+                LattiswiftBabyBear,
+                FieldType::BabyBearx16,
+                FiatShamirHashType::SHA256,
+                PolynomialCommitmentType::Lattice,
+                GKRScheme::Vanilla,
+            );
+            test_gkr_correctness_helper::<LattiswiftBabyBear>(mpi_config, None);
+        }
+        other => panic!("Unsupported GKR_TEST_FIELD_TYPE for lattiswift: {other}"),
+    }
+}
+
 #[allow(unreachable_patterns)]
 fn test_gkr_correctness_helper<Cfg: GKREngine>(
     mpi_config: MPIConfig<'_>,
@@ -237,30 +371,34 @@ fn test_gkr_correctness_helper<Cfg: GKREngine>(
     );
     root_println!(mpi_config, "Config created.");
 
-    let circuit_path = match <Cfg::FieldConfig as FieldEngine>::FIELD_TYPE {
-        FieldType::GF2Ext128 => "../".to_owned() + KECCAK_GF2_CIRCUIT,
-        FieldType::M31x1 => "../".to_owned() + KECCAK_M31_CIRCUIT,
-        FieldType::M31x16 => "../".to_owned() + KECCAK_M31_CIRCUIT,
-        FieldType::BN254 => "../".to_owned() + KECCAK_BN254_CIRCUIT,
-        FieldType::Goldilocksx1 => "../".to_owned() + KECCAK_GOLDILOCKS_CIRCUIT,
-        FieldType::Goldilocksx8 => "../".to_owned() + KECCAK_GOLDILOCKS_CIRCUIT,
-        FieldType::BabyBearx16 => "../".to_owned() + KECCAK_BABYBEAR_CIRCUIT,
-        _ => unreachable!(),
-    };
+    let circuit_path = override_test_data_path("GKR_TEST_CIRCUIT_PATH").unwrap_or_else(|| {
+        match <Cfg::FieldConfig as FieldEngine>::FIELD_TYPE {
+            FieldType::GF2Ext128 => "../".to_owned() + KECCAK_GF2_CIRCUIT,
+            FieldType::M31x1 => "../".to_owned() + KECCAK_M31_CIRCUIT,
+            FieldType::M31x16 => "../".to_owned() + KECCAK_M31_CIRCUIT,
+            FieldType::BN254 => "../".to_owned() + KECCAK_BN254_CIRCUIT,
+            FieldType::Goldilocksx1 => "../".to_owned() + KECCAK_GOLDILOCKS_CIRCUIT,
+            FieldType::Goldilocksx8 => "../".to_owned() + KECCAK_GOLDILOCKS_CIRCUIT,
+            FieldType::BabyBearx16 => "../".to_owned() + KECCAK_BABYBEAR_CIRCUIT,
+            _ => unreachable!(),
+        }
+    });
     let (mut circuit, mut window) =
         Circuit::<Cfg::FieldConfig>::prover_load_circuit::<Cfg>(&circuit_path, &mpi_config);
     root_println!(mpi_config, "Circuit loaded.");
 
-    let witness_path = match <Cfg::FieldConfig as FieldEngine>::FIELD_TYPE {
-        FieldType::GF2Ext128 => "../".to_owned() + KECCAK_GF2_WITNESS,
-        FieldType::M31x1 => "../".to_owned() + KECCAK_M31_WITNESS,
-        FieldType::M31x16 => "../".to_owned() + KECCAK_M31_WITNESS,
-        FieldType::BN254 => "../".to_owned() + KECCAK_BN254_WITNESS,
-        FieldType::Goldilocksx1 => "../".to_owned() + KECCAK_GOLDILOCKS_WITNESS,
-        FieldType::Goldilocksx8 => "../".to_owned() + KECCAK_GOLDILOCKS_WITNESS,
-        FieldType::BabyBearx16 => "../".to_owned() + KECCAK_BABYBEAR_WITNESS,
-        _ => unreachable!(),
-    };
+    let witness_path = override_test_data_path("GKR_TEST_WITNESS_PATH").unwrap_or_else(|| {
+        match <Cfg::FieldConfig as FieldEngine>::FIELD_TYPE {
+            FieldType::GF2Ext128 => "../".to_owned() + KECCAK_GF2_WITNESS,
+            FieldType::M31x1 => "../".to_owned() + KECCAK_M31_WITNESS,
+            FieldType::M31x16 => "../".to_owned() + KECCAK_M31_WITNESS,
+            FieldType::BN254 => "../".to_owned() + KECCAK_BN254_WITNESS,
+            FieldType::Goldilocksx1 => "../".to_owned() + KECCAK_GOLDILOCKS_WITNESS,
+            FieldType::Goldilocksx8 => "../".to_owned() + KECCAK_GOLDILOCKS_WITNESS,
+            FieldType::BabyBearx16 => "../".to_owned() + KECCAK_BABYBEAR_WITNESS,
+            _ => unreachable!(),
+        }
+    });
     circuit.load_witness_allow_padding_testing_only(&witness_path, &mpi_config);
     root_println!(mpi_config, "Witness loaded.");
 

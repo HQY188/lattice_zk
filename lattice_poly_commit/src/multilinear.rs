@@ -1,21 +1,108 @@
 //! Lattice-based multilinear polynomial commitment (mle_pc.md).
 //! Matrix T from f, row-wise univariate commitments, Eval/Verify with Fiat-Shamir.
+//!
+//! Parallel matrix `T` construction, row commit, [`compute_u`], and [`dot_product`] (above a length threshold)
+//! share the same environment variables (read once per process on first use):
+//! - [`ENV_COMMIT_PARALLEL`]: set to `0`, `false`, or `no` to force sequential versions.
+//! - [`ENV_COMMIT_THREADS`]: if set to a positive integer, use a dedicated thread pool with that many threads;
+//!   if unset, Rayon's **global** pool is used, which respects **`RAYON_NUM_THREADS`**.
+//! - Per-row [`crate::ajtai::AjtaiCrs::commit`] can parallelize over μ when not on a Rayon worker; see
+//!   [`crate::ajtai::ENV_AJTAI_COMMIT_PARALLEL`] / [`crate::ajtai::PAR_AJTAI_COMMIT_MIN_MU`].
+
+use std::sync::OnceLock;
 
 use arith::Field;
 use gkr_engine::StructuredReferenceString;
 use polynomials::EqPolynomial;
 use rand::RngCore;
 use rand::SeedableRng;
+use rayon::prelude::*;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use serdes::{ExpSerde, SerdeResult};
 
+use crate::ring::PolyRns;
 use crate::univariate::{random_poly};
 use crate::univariate_real::{
-    commit_real as uni_commit, open_real as uni_open, open_real_commitment_only as uni_open_commit_only,
-    setup_real as uni_setup, UniCkReal, UniCommitmentReal, UniOpeningReal,
+    commit_real as uni_commit,
+    commit_real_with_r_vec as uni_commit_with_r_vec,
+    open_real as uni_open,
+    open_real_commitment_only as uni_open_commit_only,
+    setup_real as uni_setup,
+    UniCkReal, UniCommitmentReal, UniOpeningReal,
 };
 
 /// ι ≥ 2, l/ι integer. We use ι = 2.
 pub const IOTA: usize = 2;
+
+/// Set to `0`, `false`, or `no` (case-insensitive) to disable parallel matrix build, row commit, `compute_u`, and `dot_product`.
+/// Default: parallel when each routine's granularity threshold is met.
+pub const ENV_COMMIT_PARALLEL: &str = "LATTICE_MLE_COMMIT_PARALLEL";
+
+/// If set to a positive integer, lattice MLE parallel routines use a **dedicated** Rayon pool with that many worker threads.
+/// If unset, the **global** Rayon pool is used; configure it with **`RAYON_NUM_THREADS`**.
+///
+/// Parsed once per process on first parallel use; set before first use if you rely on it.
+pub const ENV_COMMIT_THREADS: &str = "LATTICE_MLE_COMMIT_THREADS";
+
+/// Minimum slice length for parallel [`dot_product`] when [`ENV_COMMIT_PARALLEL`] is on (avoids Rayon overhead on short vectors).
+pub const PAR_DOT_PRODUCT_MIN_LEN: usize = 2048;
+
+static COMMIT_THREAD_POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
+
+fn commit_row_parallel_enabled() -> bool {
+    match std::env::var(ENV_COMMIT_PARALLEL) {
+        Ok(s) => {
+            let s = s.trim().to_ascii_lowercase();
+            !(s.is_empty() || s == "0" || s == "false" || s == "no")
+        }
+        Err(_) => true,
+    }
+}
+
+fn commit_thread_pool() -> &'static Option<ThreadPool> {
+    COMMIT_THREAD_POOL.get_or_init(|| {
+        std::env::var(ENV_COMMIT_THREADS)
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .map(|n| {
+                ThreadPoolBuilder::new()
+                    .num_threads(n)
+                    .thread_name(|i| format!("lattice-mle-commit-{i}"))
+                    .build()
+                    .expect("lattice commit thread pool")
+            })
+    })
+}
+
+fn commit_rows_zip<F: Field + ExpSerde>(
+    ck: &MleCk<F>,
+    t: &[Vec<F>],
+    r_vecs: Vec<Vec<PolyRns>>,
+) -> (Vec<UniCommitmentReal>, Vec<UniOpeningReal>) {
+    let n_rows = t.len();
+    let use_rayon = commit_row_parallel_enabled() && n_rows > 1;
+    if !use_rayon {
+        return t
+            .iter()
+            .zip(r_vecs.into_iter())
+            .map(|(row, r_vec)| uni_commit_with_r_vec(&ck.ck_uni, row, r_vec))
+            .unzip();
+    }
+    match commit_thread_pool().as_ref() {
+        Some(pool) => pool.install(|| {
+            t.par_iter()
+                .zip(r_vecs.into_par_iter())
+                .map(|(row, r_vec)| uni_commit_with_r_vec(&ck.ck_uni, row, r_vec))
+                .unzip()
+        }),
+        None => t
+            .par_iter()
+            .zip(r_vecs.into_par_iter())
+            .map(|(row, r_vec)| uni_commit_with_r_vec(&ck.ck_uni, row, r_vec))
+            .unzip(),
+    }
+}
 
 /// Multilinear ck = (ck_uni, l, ι).
 #[derive(Clone, Debug)]
@@ -163,7 +250,9 @@ fn matrix_index(l: usize, iota: usize, row: usize, col: usize) -> usize {
 
 /// Build matrix T from f (hypercube values). T[i][j] = f(b^(i,j)).
 /// Row i has 2^{l - l/ι} elements.
-pub fn build_matrix_t<F: Field>(
+///
+/// When [`ENV_COMMIT_PARALLEL`] allows it and `n_rows > 1`, rows are filled in parallel (same pool as row commit).
+pub fn build_matrix_t<F: Field + Send + Sync>(
     f_vals: &[F],
     l: usize,
     iota: usize,
@@ -171,17 +260,41 @@ pub fn build_matrix_t<F: Field>(
     assert_eq!(f_vals.len(), 1 << l);
     let n_rows = 1 << (l / iota);
     let n_cols = 1 << (l - l / iota);
-    let mut t = vec![vec![F::ZERO; n_cols]; n_rows];
-    for i in 0..n_rows {
-        for j in 0..n_cols {
-            let idx = matrix_index(l, iota, i, j);
-            t[i][j] = f_vals[idx];
+
+    let use_rayon = commit_row_parallel_enabled() && n_rows > 1;
+    if !use_rayon {
+        let mut t: Vec<Vec<F>> = (0..n_rows).map(|_| vec![F::ZERO; n_cols]).collect();
+        for (i, row) in t.iter_mut().enumerate() {
+            for j in 0..n_cols {
+                let idx = matrix_index(l, iota, i, j);
+                row[j] = f_vals[idx];
+            }
         }
+        return t;
     }
-    t
+
+    // Build `t` inside the closure so `ThreadPool::install` receives a `Send` closure (no `&mut` to caller stack).
+    let fill_parallel = || {
+        let mut t: Vec<Vec<F>> = (0..n_rows).map(|_| vec![F::ZERO; n_cols]).collect();
+        t.par_iter_mut().enumerate().for_each(|(i, row)| {
+            for j in 0..n_cols {
+                let idx = matrix_index(l, iota, i, j);
+                row[j] = f_vals[idx];
+            }
+        });
+        t
+    };
+
+    match commit_thread_pool().as_ref() {
+        Some(pool) => pool.install(fill_parallel),
+        None => fill_parallel(),
+    }
 }
 
 /// PC.Com(ck, f) -> (C, δ).
+///
+/// Row commitments run in parallel (rayon) after randomness is drawn sequentially from `rng`,
+/// so the result matches the previous sequential implementation for the same RNG state.
 pub fn commit_with_rng<F: Field + ExpSerde>(
     ck: &MleCk<F>,
     f_vals: &[F],
@@ -189,13 +302,10 @@ pub fn commit_with_rng<F: Field + ExpSerde>(
 ) -> (MleCommitment<F>, MleOpening<F>) {
     let t = build_matrix_t(f_vals, ck.l, ck.iota);
     let n_rows = t.len();
-    let mut row_commitments = Vec::with_capacity(n_rows);
-    let mut row_openings = Vec::with_capacity(n_rows);
-    for row in &t {
-        let (c_i, delta_i) = uni_commit(&ck.ck_uni, row, rng);
-        row_commitments.push(c_i);
-        row_openings.push(delta_i);
-    }
+    let r_vecs: Vec<Vec<PolyRns>> = (0..n_rows)
+        .map(|_| ck.ck_uni.crs.sample_rand_vec(rng))
+        .collect();
+    let (row_commitments, row_openings) = commit_rows_zip(ck, &t, r_vecs);
     (
         MleCommitment {
             row_commitments,
@@ -214,14 +324,11 @@ pub fn commit<F: Field + ExpSerde>(
 ) -> (MleCommitment<F>, MleOpening<F>) {
     let t = build_matrix_t(f_vals, ck.l, ck.iota);
     let n_rows = t.len();
-    let mut row_commitments = Vec::with_capacity(n_rows);
-    let mut row_openings = Vec::with_capacity(n_rows);
     let mut rng = rand::thread_rng();
-    for row in &t {
-        let (c_i, delta_i) = uni_commit(&ck.ck_uni, row, &mut rng);
-        row_commitments.push(c_i);
-        row_openings.push(delta_i);
-    }
+    let r_vecs: Vec<Vec<PolyRns>> = (0..n_rows)
+        .map(|_| ck.ck_uni.crs.sample_rand_vec(&mut rng))
+        .collect();
+    let (row_commitments, row_openings) = commit_rows_zip(ck, &t, r_vecs);
     (
         MleCommitment {
             row_commitments,
@@ -275,21 +382,68 @@ pub fn compute_a_b<F: Field>(r: &[F], l: usize, iota: usize) -> (Vec<F>, Vec<F>)
 }
 
 /// u = A · T (vector u of length 2^{l - l/ι}); u[j] = sum_i A[i] * T[i][j].
-pub fn compute_u<F: Field>(a: &[F], t: &[Vec<F>]) -> Vec<F> {
+///
+/// When [`ENV_COMMIT_PARALLEL`] allows it and `n_cols > 1`, columns of `u` are computed in parallel (same pool as matrix/commit).
+pub fn compute_u<F: Field + Send + Sync>(a: &[F], t: &[Vec<F>]) -> Vec<F> {
+    assert!(!t.is_empty());
+    let n_rows = t.len();
     let n_cols = t[0].len();
-    let mut u = vec![F::ZERO; n_cols];
-    for (i, row) in t.iter().enumerate() {
-        let ai = a[i];
-        for (j, t_ij) in row.iter().enumerate() {
-            u[j] = u[j] + ai * *t_ij;
+    assert_eq!(a.len(), n_rows);
+    debug_assert!(t.iter().all(|row| row.len() == n_cols));
+
+    let use_rayon = commit_row_parallel_enabled() && n_cols > 1;
+    if !use_rayon {
+        let mut u = vec![F::ZERO; n_cols];
+        for (i, row) in t.iter().enumerate() {
+            let ai = a[i];
+            for (j, t_ij) in row.iter().enumerate() {
+                u[j] = u[j] + ai * *t_ij;
+            }
         }
+        return u;
     }
-    u
+
+    let run_parallel = || {
+        (0..n_cols)
+            .into_par_iter()
+            .map(|j| {
+                let mut acc = F::ZERO;
+                for i in 0..n_rows {
+                    acc = acc + a[i] * t[i][j];
+                }
+                acc
+            })
+            .collect()
+    };
+
+    match commit_thread_pool().as_ref() {
+        Some(pool) => pool.install(run_parallel),
+        None => run_parallel(),
+    }
 }
 
 /// y = <u, B>.
-pub fn dot_product<F: Field>(u: &[F], b: &[F]) -> F {
-    u.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum()
+///
+/// When [`ENV_COMMIT_PARALLEL`] allows it and `u.len() >= PAR_DOT_PRODUCT_MIN_LEN`, uses a parallel sum (same pool as matrix/commit).
+pub fn dot_product<F: Field + Send + Sync>(u: &[F], b: &[F]) -> F {
+    assert_eq!(u.len(), b.len());
+    let seq = || u.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum();
+    let n = u.len();
+    if !commit_row_parallel_enabled() || n < PAR_DOT_PRODUCT_MIN_LEN {
+        return seq();
+    }
+
+    let run_parallel = || {
+        u.par_iter()
+            .zip(b.par_iter())
+            .map(|(x, y)| *x * *y)
+            .sum()
+    };
+
+    match commit_thread_pool().as_ref() {
+        Some(pool) => pool.install(run_parallel),
+        None => run_parallel(),
+    }
 }
 
 /// PC.Eval with Fiat-Shamir: prover computes (y, π1, π2) and derives e from transcript.
@@ -560,4 +714,85 @@ pub fn verify<F: Field + ExpSerde>(
         eprintln!("[mle_verify] fail: uni_open mismatch");
     }
     ok
+}
+
+#[cfg(test)]
+mod commit_row_parallel_tests {
+    use super::*;
+    use goldilocks::Goldilocks;
+    use rand::rngs::StdRng;
+    use rand::{RngCore, SeedableRng};
+    use serdes::ExpSerde;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn build_matrix_t_parallel_matches_sequential() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let l = 12usize;
+        let iota = 2usize;
+        let f: Vec<_> = (0u64..(1u64 << l)).map(Goldilocks::from).collect();
+        std::env::set_var(ENV_COMMIT_PARALLEL, "0");
+        let sequential = build_matrix_t(&f, l, iota);
+        std::env::remove_var(ENV_COMMIT_PARALLEL);
+        let parallel = build_matrix_t(&f, l, iota);
+        assert_eq!(parallel, sequential);
+    }
+
+    #[test]
+    fn compute_u_parallel_matches_sequential() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let n_rows = 32usize;
+        let n_cols = 32usize;
+        let a: Vec<_> = (0..n_rows).map(|i| Goldilocks::from(i as u64)).collect();
+        let t: Vec<Vec<_>> = (0..n_rows)
+            .map(|i| {
+                (0..n_cols)
+                    .map(|j| Goldilocks::from((i * n_cols + j) as u64))
+                    .collect()
+            })
+            .collect();
+        std::env::set_var(ENV_COMMIT_PARALLEL, "0");
+        let sequential = compute_u(&a, &t);
+        std::env::remove_var(ENV_COMMIT_PARALLEL);
+        let parallel = compute_u(&a, &t);
+        assert_eq!(parallel, sequential);
+    }
+
+    #[test]
+    fn dot_product_parallel_matches_sequential() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let n = PAR_DOT_PRODUCT_MIN_LEN + 64;
+        let u: Vec<_> = (0..n).map(|i| Goldilocks::from(i as u64)).collect();
+        let b: Vec<_> = (0..n).map(|i| Goldilocks::from((i * 7) as u64)).collect();
+        std::env::set_var(ENV_COMMIT_PARALLEL, "0");
+        let sequential = dot_product(&u, &b);
+        std::env::remove_var(ENV_COMMIT_PARALLEL);
+        let parallel = dot_product(&u, &b);
+        assert_eq!(parallel, sequential);
+    }
+
+    #[test]
+    fn commit_with_rng_same_seed_bit_identical() {
+        let l = 8usize;
+        let ck = setup::<Goldilocks>(128, l, IOTA);
+        let mut rng_f = StdRng::seed_from_u64(42);
+        let mut f = vec![Goldilocks::ZERO; 1 << l];
+        for v in f.iter_mut() {
+            *v = Goldilocks::from(rng_f.next_u64());
+        }
+        let mut rng_a = StdRng::seed_from_u64(0);
+        let mut rng_b = StdRng::seed_from_u64(0);
+        let (ca, da) = commit_with_rng(&ck, &f, &mut rng_a);
+        let (cb, db) = commit_with_rng(&ck, &f, &mut rng_b);
+        let mut ba = vec![];
+        let mut bb = vec![];
+        ca.serialize_into(&mut ba).unwrap();
+        cb.serialize_into(&mut bb).unwrap();
+        assert_eq!(ba, bb);
+        da.serialize_into(&mut ba).unwrap();
+        db.serialize_into(&mut bb).unwrap();
+        assert_eq!(ba, bb);
+    }
 }

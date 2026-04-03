@@ -9,6 +9,7 @@ members = [
     "poly_commit/msm_cuda",
     "arith/polynomials", 
     "bin", # binary executables
+    "tools/expander_to_virgo",
     "circuit",
     "config_macros", # proc macros used to declare a new config, this has to a separate crate due to rust compilation issues
     "gkr",

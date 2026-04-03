@@ -1,0 +1,16 @@
+[package]
+name = "expander_to_virgo"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "expander_to_virgo"
+path = "main.rs"
+
+[dependencies]
+arith = { path = "../../arith" }
+babybear = { path = "../../arith/babybear" }
+circuit = { path = "../../circuit" }
+gkr_engine = { path = "../../gkr_engine" }
+mersenne31 = { path = "../../arith/mersenne31" }
+serdes = { path = "../../serdes" }
