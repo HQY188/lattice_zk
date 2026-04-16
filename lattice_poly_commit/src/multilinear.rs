@@ -1,5 +1,14 @@
-//! Lattice-based multilinear polynomial commitment (mle_pc.md).
-//! Matrix T from f, row-wise univariate commitments, Eval/Verify with Fiat-Shamir.
+//! 基于格的多线性（MLE）承诺核心（见 `mle_pc.md`）。
+//!
+//! ## 协议层面（核对正确性时按此顺序读）
+//! 1. **`build_matrix_t`**：把 `f` 在 `{0,1}^l` 上的取值按引理 1 重排为矩阵 `T`（行 = tail 索引，列 = head 索引）。
+//! 2. **`commit` / `commit_with_rng`**：对 `T` 的每一行系数做 **`univariate_real::commit`**，得到行承诺向量 `C` 与打开随机性 `δ`。
+//! 3. **`compute_a_b`**：由挑战点 `r` 拆成 head/tail，分别构造等值多项式权重 `B`、`A`（论文记号）。
+//! 4. **`compute_u` / `dot_product`**：\(u = A \cdot T\)，\(y = \langle u, B\rangle\)，应等于多元式在 `r` 处的取值。
+//! 5. **`eval_with_fs` / `eval_with_fs_given_a`**：随机盲化多项式 `a(X)`，Fiat-Shamir 挑战 `e`，构造 \(z = a + e u\) 及承诺线性组合 \(c_z = c_a + e c_u\)，并组装环上的打开 `δ_z`。
+//! 6. **`verify`**：验证 \(c_z\) 与 \(z\cdot B = t + e y\)，并对 \(c_z\) 做 **`open_real_commitment_only`**。
+//!
+//! 下面英文段说明并行与环境变量（性能，与数学无关）。
 //!
 //! Parallel matrix `T` construction, row commit, [`compute_u`], and [`dot_product`] (above a length threshold)
 //! share the same environment variables (read once per process on first use):

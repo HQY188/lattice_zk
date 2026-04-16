@@ -1,6 +1,9 @@
 # Build Virgo zk_proof on Windows with MinGW-w64 g++ (not MSVC).
 # Requires: Git, CMake, MinGW g++ on PATH; git submodules; Virgo/lib/*.a
 #
+# 【本脚本逐步】初始化 Virgo 子模块 -> 检查 flo-shani / XKCP 依赖文件 ->
+# 查找 MinGW g++ -> cmake配置（MinGW Makefiles）->仅编译目标 zk_proof -> 提示输出路径。
+#
 # Usage:
 #   .\scripts\build_virgo.ps1
 #   .\scripts\build_virgo.ps1 -VirgoRoot D:\path\to\Virgo

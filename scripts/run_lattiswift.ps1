@@ -1,3 +1,16 @@
+<#
+Lattice PCS（lattice_poly_commit）+ GKR 正确性：通过 cargo test 跑单测 gkr_correctness_lattiswift_case。
+
+【逐步在做什么】
+1) 解析仓库根；默认 DataDir =仓库/data。
+2) （Windows）尝试加载 vcvars64.bat、自动找 LIBCLANG_PATH，以便 mpi-sys/bindgen 能编译。
+3) 按开关设置 Lattice并行相关环境变量（LATTICE_MLE_COMMIT_*、RAYON_NUM_THREADS）。
+4) 固定跑两个用例：circuit_m31.txt、circuit_babybear.txt（及对应 witness），设置   GKR_TEST_FIELD_TYPE、GKR_TEST_CIRCUIT_PATH、GKR_TEST_WITNESS_PATH。
+5) 在仓库根执行 cargo test -p gkr ... gkr_correctness_lattiswift_case（见 gkr/src/tests/gkr_correctness.rs）。
+
+【用的电路】与 Libra 相同来源的 data下 Keccak 基准二进制（gkr/src/utils.rs 中 KECCAK_M31_CIRCUIT / KECCAK_BABYBEAR_CIRCUIT）；
+本脚本只选 m31、babybear 两种域（Lattice PCS 编码与 SIMD 路径限制）。PCS 类型在测试代码里为 PolynomialCommitmentType::Lattice。
+#>
 param(
   [string]$DataDir = "",
   [switch]$NoCapture,
@@ -192,9 +205,6 @@ function Set-LattiswiftParallelEnv {
 }
 
 Set-LattiswiftParallelEnv
-
-# Lattiswift: gkr test gkr_correctness_lattiswift_case (Lattice PCS + SHA256).
-# Only m31 and babybear (SIMD-friendly as_u32 path in lattice_poly_commit).
 
 $cases = @(
   @{ Field = "m31"; Circuit = "circuit_m31.txt" },

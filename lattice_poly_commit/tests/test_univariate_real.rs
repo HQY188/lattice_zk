@@ -1,3 +1,5 @@
+//! `univariate_real`：Ajtai 单变量承诺的 round-trip（commit/open）与 eval/verify。
+
 use goldilocks::Goldilocks;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use arith::Field;

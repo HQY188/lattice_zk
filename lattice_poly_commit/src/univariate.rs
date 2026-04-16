@@ -1,6 +1,7 @@
-//! Stub univariate polynomial commitment for the lattice MLE scheme.
-//! Matches the interface of mle_pc.md (Setup, Com, Open, Eval, Verify).
-//! Commitment is stored as coefficient vector to support linear combination c_z = c_a + e·c_u.
+//! **占位**单变量多项式承诺：承诺就是系数向量，便于在测试/接口层模拟“线性组合可交换”。
+//!
+//! 真实格实现见 **`univariate_real`**（Ajtai）。本模块保留 `random_poly` 等工具函数供 `multilinear` 采样 `a(X)`。
+//! 接口命名对齐 `mle_pc.md`：`setup / commit / open / eval / verify`。
 
 use arith::Field;
 use rand::RngCore;
@@ -103,11 +104,13 @@ pub fn univariate_eval<F: Field>(coeffs: &[F], x: &F) -> F {
 }
 
 /// PC.Setup(1^λ, N) -> ck
+#[allow(dead_code)]
 pub fn setup<F: Field>(_lambda: usize, n: usize) -> UniCk<F> {
     UniCk::new(n)
 }
 
 /// PC.Com(ck, h(X)) -> (c, δ). Stub: c = coeffs, δ = (coeffs,).
+#[allow(dead_code)]
 pub fn commit<F: Field>(ck: &UniCk<F>, coeffs: &[F]) -> (UniCommitment<F>, UniOpening<F>) {
     assert!(coeffs.len() <= ck.n);
     let mut c = coeffs.to_vec();
@@ -119,6 +122,7 @@ pub fn commit<F: Field>(ck: &UniCk<F>, coeffs: &[F]) -> (UniCommitment<F>, UniOp
 }
 
 /// PC.Open(ck, c, h, δ): check c equals polynomial coefficients.
+#[allow(dead_code)]
 pub fn open<F: Field>(
     _ck: &UniCk<F>,
     c: &UniCommitment<F>,

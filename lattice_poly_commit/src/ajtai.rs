@@ -1,3 +1,10 @@
+//! Ajtai 型线性承诺：\( \mathbf{c} = A_0 \mathbf{m} + A_1 \mathbf{r} \)，其中每个条目是环 \(R_q\) 上元素，
+//! 环乘用否定循环卷积（见 `PolyRns::mul_negacyclic`）。
+//!
+//! - **`AjtaiCrs::setup`**：均匀随机采样矩阵多项式。
+//! - **`commit`**：对消息向量 `m`（长度 `ell`）与随机性 `r`（长度 `nu`）按行累加；可选并行 μ 维。
+//! - **`sample_rand_vec`**：按离散高斯采样 `r`（原型实现，非密码学硬化）。
+
 use rand::RngCore;
 use rayon::prelude::*;
 use serdes::{ExpSerde, SerdeResult};
@@ -104,6 +111,7 @@ impl AjtaiCrs {
             let value: Vec<PolyRns> = (0..mu)
                 .into_par_iter()
                 .map(|i| {
+                    // 与顺序版本相同：第 i 行与 m、r 的环上双线性形式
                     let mut acc = PolyRns::zero(ring_degree, moduli.clone());
                     for j in 0..ell {
                         let prod = a0[i][j].mul_negacyclic(&m[j], &ntt);
@@ -123,7 +131,7 @@ impl AjtaiCrs {
         let ntt = self.params.ntt_plan();
 
         for i in 0..mu {
-            // sum_j A0[i][j] * m[j] + sum_j A1[i][j] * r[j]
+            // 第 i 个承诺分量：环上 c_i = Σ_j A0[i,j]*m[j] + Σ_j A1[i,j]*r[j]
             for j in 0..self.params.ell {
                 let prod = self.a0[i][j].mul_negacyclic(&m[j], &ntt);
                 out.value[i].add_assign(&prod);

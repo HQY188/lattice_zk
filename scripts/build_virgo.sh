@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Linux / WSL：与 Virgo 官方 README、setup.sh 一致，使用 GCC/Clang 编译 zk_proof。
+#
+# 【逐步】cd 到仓库根 -> Virgo 子模块 init -> 检查 include/lib ->
+# cmake -S Virgo -B Virgo/build-linux ->仅构建目标 zk_proof。
+#
 # 用法：在 Expander 仓库根目录执行  ./scripts/build_virgo.sh
 set -euo pipefail
 

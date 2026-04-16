@@ -1,5 +1,12 @@
-//! ExpanderPCS implementation for the lattice-based multilinear PC (mle_pc.md).
-//! Uses Fiat-Shamir to make Eval non-interactive.
+//! 对接 **Expander / GKR** 的多元承诺：`gkr_engine::ExpanderPCS` 实现。
+//!
+//! ## 在整条证明管线里的位置
+//! - **`gen_srs` / `gen_params`**：由输入变量数、SIMD pack、MPI 世界大小推出超立方体维数 `l`，再调用 `multilinear::setup`。
+//! - **`commit`**：把 SIMD 多元式在 `l` 维超立方体上展平（或与 MPI gather 合并成全立方体），再 `mle_commit_with_rng`；**缓存** `(C,δ)` 供后续 `open` 复用（GKR 会对同一多项式开两次）。
+//! - **`open`**：重算/复用承诺，构造 `T`、`u`、`y`，随机 `a(X)` 做单变量承诺，把 `y` 与 `π1` 喂给 transcript得挑战 `e`，再调 `eval_with_fs_given_a` 得 `π2`。
+//! - **`verify`**：检查 `opening.y == v`，重放 transcript 得 `e`，调用 `multilinear::verify`。
+//!
+//! Fiat-Shamir 把交互式 Eval 变为对 transcript 的哈希挑战（与 `mle_pc.md` 中 FS 编排一致）。
 
 use arith::{Field, SimdField};
 use gkr_engine::{

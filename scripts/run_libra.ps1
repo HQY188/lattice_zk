@@ -1,3 +1,17 @@
+<#
+Libra 口径：Raw PCS + GKR 正确性测试（cargo test），遍历 data 下所有 *circuit*.txt。
+
+【逐步在做什么】
+1) 解析仓库根与 data 目录（可用 -DataDir 覆盖）。
+2) 枚举 DataDir 下所有 *circuit*.txt；对每个文件找同名把 circuit 换成 witness 的 witness 文件。
+3) 根据文件名推断域类型（bn254/babybear/goldilocks/gf2/m31），设置环境变量：
+   GKR_TEST_CIRCUIT_PATH、GKR_TEST_WITNESS_PATH、GKR_TEST_FIELD_TYPE。
+4) 反复执行：cargo test -p gkr --release gkr_correctness_libra_case（见 gkr/src/tests/gkr_correctness.rs）。
+
+【用的电路】各 data/circuit_*.txt 为 Keccak 基准的二进制电路（常量定义在 gkr/src/utils.rs）；Fiat-Shamir 在测试里固定为 SHA256（与电路文件名无关）。
+
+参数 -IncludeEmpty：不跳过 0 字节占位文件；-NoCapture 保留兼容（测试始终带 --nocapture）。
+#>
 param(
   [string]$DataDir = "",
   [switch]$NoCapture,
@@ -23,8 +37,7 @@ if (!(Test-Path $DataDir)) {
   throw "data directory not found: $DataDir"
 }
 
-# Libra(raw) correctness test (Raw PCS + SHA256) over all datasets under data/.
-# We iterate all '*circuit*.txt' datasets that have a matching witness.
+# 与 witness 成对：文件名中 circuit -> witness
 $circuits = Get-ChildItem -LiteralPath $DataDir -File -Filter "*circuit*.txt" | Sort-Object Name
 if ($circuits.Count -eq 0) {
   throw "no circuit files found under: $DataDir (pattern: *circuit*.txt)"

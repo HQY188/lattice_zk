@@ -1,6 +1,11 @@
+//! 否定循环 NTT（长度 `n` 为 2 的幂）：实现 \( \mathbb{Z}_q[X]/(X^n+1) \) 上的快速乘法。
+//!
+//! `psi` 为模 `q` 下的本原 `2n` 次单位根（故 `psi^n = -1`）。`fwd`/`inv` 含 twist/untwist 与 bit-reverse 蝶形运算。
+//! `NttPlan` 对 RNS 的每一腿各持有一张 `NttTable`。
+
 use crate::ring::RnsModuli;
 
-/// Negacyclic NTT table for a single modulus q and ring degree n (power of two).
+/// 单个模数 `q`、环维度 `n` 上的否定循环 NTT 预计算表。
 #[derive(Clone, Debug)]
 pub struct NttTable {
     pub n: usize,

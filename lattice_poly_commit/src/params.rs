@@ -1,7 +1,11 @@
+//! 全库共享的格承诺参数：环、模数、Ajtai 形状、编码块大小与（原型）统计/范数界。
+//!
+//! `LatticeParams::default_small()` 给出一组可在 MSVC 上跑的默认：Goldilocks 素数、256 维否定循环环。
+
 use crate::ring::{NttPlan, RnsModuli};
 use serdes::{ExpSerde, SerdeResult};
 
-/// Parameters for a (prototype) lattice-based univariate polynomial commitment over R_q.
+/// 基于环 \(R_q\) 的单变量/多元子承诺所共用的参数（原型）。
 ///
 /// This implementation is **MSVC-friendly** (pure Rust) and focuses on correctness of the
 /// algebraic relations used by `mle_pc.md`. It intentionally keeps the encoding simple
@@ -42,7 +46,15 @@ impl LatticeParams {
     /// - modulus = Goldilocks prime (2^64 - 2^32 + 1)
     /// - mu=1, nu=2, ell=1, n=256
     pub fn default_small() -> Self {
-        let ring_degree = 256usize;
+        Self::for_univariate_coeffs(256)
+    }
+
+    /// Parameters for committing up to `num_coeffs` coefficients in one negacyclic block.
+    ///
+    /// `ring_degree` is the smallest power of two ≥ max(256, `num_coeffs`), so MLE rows with
+    /// `n_cols` up to that size are supported (see [`crate::multilinear::setup`]).
+    pub fn for_univariate_coeffs(num_coeffs: usize) -> Self {
+        let ring_degree = num_coeffs.next_power_of_two().max(256);
         let moduli = RnsModuli::new(vec![goldilocks::GOLDILOCKS_MOD]);
         let psi = vec![goldilocks_psi(ring_degree)];
         Self {
@@ -54,10 +66,6 @@ impl LatticeParams {
             ell: 1,
             n: ring_degree,
             sigma: 3.2,
-            // With the current prototype encoding (direct coefficient embedding),
-            // message coefficients can be uniform mod q, making the balanced-lift 2-norm
-            // on the order of ~sqrt(d)*q. Use a very loose bound so correctness tests
-            // don't fail due to encoding (not security) considerations.
             beta_open: 1e30,
             beta_eval: 1e30,
         }
@@ -105,6 +113,7 @@ impl ExpSerde for LatticeParams {
     }
 }
 
+/// 二进制快速幂：\(a^e \bmod q\)，供构造本原根幂次使用。
 fn pow_mod(mut a: u64, mut e: u64, q: u64) -> u64 {
     let mut r = 1u64;
     while e > 0 {
@@ -117,6 +126,7 @@ fn pow_mod(mut a: u64, mut e: u64, q: u64) -> u64 {
     r
 }
 
+/// 对 Goldilocks 模数，从内置 2^32 阶单位根推出长度 `2d` 否定循环 NTT 所需的 `psi`（满足 \(\psi^d=-1\)等）。
 fn goldilocks_psi(d: usize) -> u64 {
     use arith::FFTField;
     // Goldilocks has a primitive 2^32 root in FFTField::root_of_unity().

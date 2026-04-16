@@ -1,3 +1,11 @@
+//! **真实**单变量（系数向量）承诺：把次数 `< N` 的多项式系数用 `encode_block` 编成单个环消息块，再 **`AjtaiCrs::commit`**。
+//!
+//! - **`UniCommitmentReal`**：`blocks` 一般为一块 Ajtai 承诺（原型 `ell=1`）。
+//! - **`UniOpeningReal`**：明文消息块 `m_blocks` + 对应的 Ajtai 随机性 `r_blocks`（每块是长度 `nu` 的环多项式向量）。
+//! - **`open_real`**：检查 `m` 是否等于系数编码、范数是否低于 `beta_open`、承诺是否等于 `commit(m,r)`。
+//! - **`open_real_commitment_only`**：MLE 最后一步：\(m_z = m_a + e m_u\) 不再对应简单“系数嵌入”，只验证 **承诺与打开一致**。
+//! - **`eval_real` / `verify_real`**：在基域上按系数求值（系数从第一条 RNS 腿读出）；原型揭示 `m`，非 succinct。
+
 use arith::Field;
 use rand::RngCore;
 use serdes::{ExpSerde, SerdeResult};
@@ -71,13 +79,10 @@ impl ExpSerde for UniOpeningReal {
 /// Setup(1^λ, N) -> ck. (λ ignored in this prototype; CRS sampled from rng)
 pub fn setup_real(lambda: usize, n: usize, rng: &mut impl RngCore) -> UniCkReal {
     let _ = lambda;
-    // Choose params such that ring_degree == chunk size.
-    let mut params = LatticeParams::default_small();
-    params.n = params.ring_degree;
+    // Grow the negacyclic ring so one block can hold all row coefficients (MLE column count).
+    let mut params = LatticeParams::for_univariate_coeffs(n);
     params.ell = 1;
-    // If n differs from default ring_degree, we currently require n <= ring_degree and
-    // commit to padded polynomial blocks.
-    assert!(n <= params.ring_degree, "prototype requires N <= ring_degree");
+    assert!(n <= params.ring_degree, "N must fit in one block");
     let crs = AjtaiCrs::setup(params.clone(), rng);
     UniCkReal { params, crs }
 }

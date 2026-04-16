@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Virgo zk_proof：与 scripts/run_virgo.ps1 对齐。
-# 优先 VIRGO_M31_* / VIRGO_BABYBEAR_*；否则若存在 data/circuit_{m31,babybear}.txt 且已构建 expander_to_virgo，则依次测 m31 与 babybear；
-# 可选 --sha256-fallback 使用 Virgo/tests/SHA256 预生成电路（非 Expander data）。
+#
+# 【分支与 run_virgo.ps1 相同】环境变量指定电路；或 data/ + expander_to_virgo；
+# 或 --sha256-fallback 使用 Virgo/tests/SHA256 的 ASCII 电路。
+#
+# 【注意】data/circuit_m31.txt 在 Expander 内是二进制序列化；zk_proof 通过 EXPANDER_TO_VIRGO 在运行时转换，
+# 与 gkr 测试“直接 prover_load_circuit”读同一文件但消费路径不同。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

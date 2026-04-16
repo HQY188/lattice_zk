@@ -10,6 +10,17 @@ Virgo：
 - 优先通过 WSL 运行 `Virgo/tests/SHA256` 的 `build.py` + `run.py`
 - 解析其 `LOG/SHA256_*.txt`（每行 5 列，最后一列为 proof_size）
 
+【执行流程（从上到下）】
+1) 解析 -OutDir，在仓库下创建输出目录。
+2) 若未 -SkipExpander：Release 预编译 expander-exec（可选 -SkipBuild 跳过）。
+3) 对每个 Dataset（如 m31）：读 `data/circuit_<dataset>.txt` 与 `data/witness_<dataset>.txt`，对 PCS=Orion 与 PCS=Raw 各跑 -Runs 次：
+   `cargo run ... expander-exec -- -f SHA256 -p <PCS> prove/verify`（电路文件决定域类型；这些文件是 Keccak 基准的二进制序列化，见 gkr/src/utils.rs）。
+4) 将每行结果导出为 expander_exec.csv。
+5) 若未 -SkipVirgo 且本机有 WSL：在 Virgo/tests/SHA256 下跑 Python 基准，解析 LOG 得到 virgo_sha256.csv。
+6) 写 summary.md 汇总表。
+
+【依赖】Run-Cargo 会调用 scripts\setup_env_win.ps1（若不存在需自行配置 cargo/MPI 环境）。
+
 用法（仓库根目录）：
   .\scripts\perf_all.ps1 -Runs 3 -Threads 1 -Datasets m31,bn254,gf2 -OutDir perf_out
 #>
@@ -37,6 +48,7 @@ function Assert-File([string]$path, [string]$hint) {
     if (-not (Test-Path $path)) { throw ('Missing file: ' + $path + '. ' + $hint) }
 }
 
+# 通过 setup_env_win.ps1 注入 Windows 下 cargo/MPI 等环境后再执行 cargo（与仓库其它脚本一致）
 function Run-Cargo([string[]]$cargoArgs) {
     $setup = Join-Path $Root 'scripts\setup_env_win.ps1'
     Assert-File $setup 'Run from repo root, or ensure scripts/setup_env_win.ps1 exists.'
@@ -52,6 +64,7 @@ function Stopwatch-Ms([scriptblock]$action) {
     return [long]$sw.Elapsed.TotalMilliseconds
 }
 
+# 将逻辑名（m31/bn254/gf2）映射到 data 下成对的路径
 function Get-ExpanderDataset([string]$name) {
     $circuit = Join-Path $Root ('data\circuit_' + $name + '.txt')
     $witness = Join-Path $Root ('data\witness_' + $name + '.txt')
@@ -66,11 +79,13 @@ function Expander-Prebuild() {
     Run-Cargo @('build', '-p', 'bin', '--bin', 'expander-exec', '--release')
 }
 
+# 单次：prove（计时）-> 读 proof 字节数 -> verify（计时）
 function Expander-RunOnce([string]$impl, [string]$pcs, [object]$ds, [int]$runIndex, [string]$outDirAbs) {
     $proofDir = Join-Path $outDirAbs 'proofs'
     Ensure-Dir $proofDir
     $proofPath = Join-Path $proofDir ($impl + '_' + $pcs + '_' + $ds.Name + '_run' + $runIndex + '.bin')
 
+    # -f SHA256：Fiat-Shamir 用 SHA256；电路本身仍由 -c 指定的二进制文件决定（Keccak 基准）
     $common = @('run', '-p', 'bin', '--bin', 'expander-exec', '--release', '--', '-f', 'SHA256', '-p', $pcs)
     $proveArgs = $common + @('prove', '-c', $ds.Circuit, '-w', $ds.Witness, '-o', $proofPath)
     $verifyArgs = $common + @('verify', '-c', $ds.Circuit, '-w', $ds.Witness, '-i', $proofPath)

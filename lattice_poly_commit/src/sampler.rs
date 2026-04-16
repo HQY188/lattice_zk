@@ -1,14 +1,21 @@
+//! 可复现随机性工具：PRG 与（原型）离散高斯采样。
+//!
+//! - **`ShakePrg`**：种子经 SHA-256 后喂给 ChaCha20，用于需要确定性扩展比特的场景。
+//! - **`GaussianSampler`**：Box–Muller 生成正态再四舍五入为整数，再约化到各模数；**非**常数时间、**非**精确离散高斯，仅用于代数原型。
+
 use rand::RngCore;
 use rand_chacha::ChaCha20Rng;
 use sha2::{Digest, Sha256};
 use rand::SeedableRng;
 
-/// A simple PRG based on ChaCha20Rng seeded by SHA-256(seed).
+/// 以 SHA-256(seed) 为密钥的 ChaCha20 PRG（简单可复现扩展）。
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct ShakePrg {
     rng: ChaCha20Rng,
 }
 
+#[allow(dead_code)]
 impl ShakePrg {
     pub fn new(seed: &[u8]) -> Self {
         let digest = Sha256::digest(seed);

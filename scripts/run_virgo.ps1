@@ -1,3 +1,15 @@
+<#
+用 Virgo 的 zk_proof 可执行文件跑证明（与 Expander 侧 data 或 Virgo 自带用例对接）。
+
+【三种入口优先级】
+1) 若设置 VIRGO_M31_* / VIRGO_BABYBEAR_*（circuit/meta/log 路径）：直接 zk_proof；并设 EXPANDER_FIELD + witness 路径供 expander_to_virgo 转换。
+2) 否则若存在 data/circuit_m31.txt 或 circuit_babybear.txt：要求已编译 expander_to_virgo，通过环境变量 EXPANDER_TO_VIRGO 在 zk_proof 内把 Expander 二进制电路转为 Virgo 文本（circuit 参数仍指向 .txt 二进制路径，meta 用占位）。
+3) -UseSha256Fallback：改用 Virgo/tests/SHA256 下预生成的 SHA256 Merkle 文本电路（与 data/ 的 Keccak 基准不是同一文件格式/语义）。
+
+【本脚本逐步】查找 zk_proof 与 expander_to_virgo -> 设 EXPANDER_TO_VIRGO（若有）-> 按上述分支调用 zk_proof。
+
+【与 perf_all / lattice 测试的区别】此处电路可能是 Virgo 文本格式或经转换；run_lattiswift/run_libra 用的是 gkr 直接加载的 data/*.txt（RecursiveCircuit 序列化）。
+#>
 param(
   [string]$VirgoRoot = "",
   [string]$ZkProofExe = "",

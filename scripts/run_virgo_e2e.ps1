@@ -2,6 +2,10 @@
 # 1) Prefer Virgo/tests/SHA256 SHA256_64_merkle_{1,2}_*.txt (official Virgo samples).
 # 2) Else compile Virgo/tests/matmul/gen.cpp and run mat size 2 and 4 (two small circuits).
 #
+# 【逐步】找 zk_proof -> 若有 SHA256 官方样例则跑 merkle_1/2 各一次并写 log到 results/；
+# 否则用 g++ 编译 gen.cpp，生成 mat_2 / mat_4 电路与 meta，再各跑 zk_proof。
+# 与仓库 GKR/Lattice 测试用的 data/ Keccak 文件无直接关系。
+#
 # Usage (repo root):
 #   .\scripts\run_virgo_e2e.ps1
 #   .\scripts\run_virgo_e2e.ps1 -VirgoRoot D:\path\to\Virgo

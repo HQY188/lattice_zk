@@ -1,3 +1,7 @@
+//! 多元（MLE）承诺的集成测试：`commit`+`open` 与带 Fiat-Shamir 的 `eval`+`verify`。
+//!
+//! 使用 Goldilocks 域元素作为超立方体取值，参数 `l=8`、`iota=2`。
+
 use goldilocks::Goldilocks;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use arith::Field;

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Two-point Virgo zk_proof e2e: SHA256 merkle_1/2 if present, else matmul gen 2 and 4.
+#
+# 【逐步】同 run_virgo_e2e.ps1：优先 Virgo/tests/SHA256；否则 tests/matmul/gen.cpp 生成小规模矩阵乘电路。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
