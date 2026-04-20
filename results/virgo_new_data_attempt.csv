@@ -1,0 +1,5 @@
+﻿"Circuit","Status","ProverSec","VerifySec","ProofBytes","Pass","LogPath"
+"matmul_M31_2pow4_n16_circuit.txt","ConvertFailed",,,,,
+"matmul_M31_2pow5_n32_circuit.txt","ConvertFailed",,,,,
+"matmul_M31_2pow6_n64_circuit.txt","ConvertFailed",,,,,
+"matmul_M31_2pow7_n128_circuit.txt","ConvertFailed",,,,,

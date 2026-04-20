@@ -1,0 +1,6 @@
+﻿"Circuit","Status","ProverSec","VerifySec","ProofBytes","Pass","LogPath"
+"mat_128_circuit.txt","OK","1.219805","0.011041","129888","Pass","D:\Code\lattice_zk\results\virgo_matmul_work\mat_128\mat_128_virgo.log"
+"mat_16_circuit.txt","OK","0.859506","0.011356","129968","Pass","D:\Code\lattice_zk\results\virgo_matmul_work\mat_16\mat_16_virgo.log"
+"mat_256_circuit.txt","OK","4.933141","0.007400","157216","Pass","D:/Code/lattice_zk/results/mat256_wsl.log (WSL Linux zk_proof; Windows MinGW zk_proof.exe exits 0xC0000005 after GKR phase)"
+"mat_32_circuit.txt","OK","0.855842","0.011162","128832","Pass","D:\Code\lattice_zk\results\virgo_matmul_work\mat_32\mat_32_virgo.log"
+"mat_64_circuit.txt","OK","0.888769","0.011085","130720","Pass","D:\Code\lattice_zk\results\virgo_matmul_work\mat_64\mat_64_virgo.log"

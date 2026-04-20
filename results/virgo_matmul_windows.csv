@@ -1,0 +1,4 @@
+﻿"Circuit","Status","ProverSec","VerifySec","ProofBytes","Pass","LogPath"
+"mat_16_circuit.txt","OK","0.911609","0.013527","129968","Pass","D:\Code\lattice_zk\results\virgo_matmul_work\mat_16\mat_16_virgo.log"
+"mat_32_circuit.txt","OK","1.215628","0.017677","128832","Pass","D:\Code\lattice_zk\results\virgo_matmul_work\mat_32\mat_32_virgo.log"
+"mat_64_circuit.txt","OK","1.454215","0.01775","130720","Pass","D:\Code\lattice_zk\results\virgo_matmul_work\mat_64\mat_64_virgo.log"

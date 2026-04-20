@@ -12,7 +12,10 @@
 param(
   [string]$VirgoRoot = "",
   [string]$Gxx = "",
-  [string]$BuildDir = "build-mingw"
+  [string]$BuildDir = "build-mingw",
+  # Ninja 在 Windows 上常随 CMake 安装；若无 MinGW Makefiles 所需的 mingw32-make，请使用 Ninja。
+  [ValidateSet("Ninja", "MinGW Makefiles")]
+  [string]$Generator = "Ninja"
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,6 +98,24 @@ if (-not $candidate) {
 }
 LogInfo ('CXX=' + $candidate)
 
+$cmakeExe = $null
+$cmakeCmd = Get-Command cmake -ErrorAction SilentlyContinue
+if ($cmakeCmd) { $cmakeExe = $cmakeCmd.Source }
+if (-not $cmakeExe) {
+  foreach ($base in @(
+      (Join-Path ${env:ProgramFiles} 'CMake\bin\cmake.exe'),
+      (Join-Path ${env:ProgramFiles(x86)} 'CMake\bin\cmake.exe'),
+      'C:\msys64\ucrt64\bin\cmake.exe',
+      'C:\msys64\mingw64\bin\cmake.exe'
+    )) {
+    if ($base -and (Test-Path $base)) { $cmakeExe = $base; break }
+  }
+}
+if (-not $cmakeExe) {
+  Write-Error 'cmake not found. Install CMake (https://cmake.org/download/) or add cmake.exe to PATH.'
+}
+LogInfo ('CMake=' + $cmakeExe)
+
 $gccPath = $null
 if ($candidate -match 'g\+\+\.exe$') {
   $gccPath = $candidate -replace 'g\+\+\.exe$', 'gcc.exe'
@@ -115,7 +136,7 @@ if (-not (Test-Path $buildPath)) {
 $cmakeArgs = @(
   '-S', $VirgoRoot,
   '-B', $buildPath,
-  '-G', 'MinGW Makefiles',
+  '-G', $Generator,
   '-DCMAKE_BUILD_TYPE=Release',
   ('-DCMAKE_CXX_COMPILER=' + $candidate)
 )
@@ -124,22 +145,33 @@ if ($gccPath) {
 }
 
 LogInfo ('cmake ' + ($cmakeArgs -join ' '))
-& cmake @cmakeArgs
+& $cmakeExe @cmakeArgs
 if ($LASTEXITCODE -ne 0) {
   Write-Error 'CMake configure failed.'
 }
 
-LogInfo 'cmake --build ... --target zk_proof'
-& cmake --build $buildPath --target zk_proof -j 8
+LogInfo 'cmake --build ... --target zk_proof fft_gkr'
+& $cmakeExe --build $buildPath --target zk_proof -j 8
 if ($LASTEXITCODE -ne 0) {
-  Write-Error 'Build failed.'
+  Write-Error 'Build failed (zk_proof).'
+}
+& $cmakeExe --build $buildPath --target fft_gkr -j 8
+if ($LASTEXITCODE -ne 0) {
+  Write-Error 'Build failed (fft_gkr).'
 }
 
 $outExe = Join-Path $buildPath 'zk_proof.exe'
+$fftExe = Join-Path $buildPath 'fft_gkr.exe'
 if (Test-Path $outExe) {
   Write-Host ''
   LogInfo ('OK: ' + $outExe)
-  Write-Host 'Run from repo root: .\scripts\run_virgo.ps1'
+  if (Test-Path $fftExe) {
+    LogInfo ('OK: ' + $fftExe)
+  }
+  else {
+    Write-Warning ('[build_virgo] fft_gkr not found: ' + $fftExe)
+  }
+  Write-Host 'Run from repo root: .\scripts\run_virgo.ps1 or .\scripts\run_virgo_matmul.ps1'
 }
 else {
   Write-Warning ('[build_virgo] Not found: ' + $outExe)
